@@ -1,6 +1,8 @@
 # app.py
-import streamlit as st
+import json
 from datetime import datetime
+
+import streamlit as st
 
 from jd_analyzer import analyze_job_description
 from question_generator import (
@@ -10,9 +12,42 @@ from question_generator import (
 )
 from evaluator import evaluate_answer
 from report_generator import generate_candidate_report
+from audio_stt import transcribe_audio_bytes
+from streamlit_mic_recorder import mic_recorder
 
 # ---------- Streamlit Page Config ----------
 st.set_page_config(page_title="AI HR Interview Agent", layout="wide")
+
+
+# ---------- Small helper: make agent speak the question ----------
+def speak_text(text: str, key: str):
+    """
+    Use browser's SpeechSynthesis (Web Speech API) to speak text on the client side.
+    We track a key so we don't re-speak same question on every rerun.
+    """
+    spoken_flag_key = f"spoken_{key}"
+    if st.session_state.get(spoken_flag_key):
+        return
+
+    st.session_state[spoken_flag_key] = True
+
+    escaped = json.dumps(text)
+    st.markdown(
+        f"""
+        <script>
+        const text = {escaped};
+        if ("speechSynthesis" in window) {{
+            const msg = new SpeechSynthesisUtterance(text);
+            msg.rate = 1;
+            msg.pitch = 1;
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(msg);
+        }}
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 # ---------- Session State Initialization ----------
 if "jd_info" not in st.session_state:
@@ -44,14 +79,14 @@ if "interview_finished" not in st.session_state:
 if "candidate_started" not in st.session_state:
     st.session_state.candidate_started = False
 
+# Threshold to go to next round (avg overall impression out of 10)
+ROUND_PASS_THRESHOLD = 6.0
+
 # ---------- Sidebar: Role Selection ----------
 st.sidebar.title("🧑‍💼 Role Selection")
 user_role = st.sidebar.radio("Who is using this interface?", ["HR", "Candidate"])
 
-st.title("🎙️ AI HR Interview Agent (Gemini-based)")
-
-# Threshold to go to next round (avg overall impression out of 10)
-ROUND_PASS_THRESHOLD = 6.0
+st.title("🎙️ AI HR Interview Agent (Voice-based)")
 
 # ======================================================================
 #                           HR INTERFACE
@@ -146,7 +181,7 @@ if user_role == "HR":
                 f"✅ Candidate answered {answered_q} out of ~{total_questions} questions."
             )
 
-            # Show per-round average scores
+            # Per-round average scores
             st.write("### Per-Round Performance (avg overall impression)")
 
             round_scores = {}
@@ -189,16 +224,16 @@ if user_role == "HR":
     st.sidebar.info(
         "HR View:\n\n"
         "- Configure JD & rounds in 'HR Setup'\n"
-        "- Candidate uses 'Candidate' role to attend interview\n"
+        "- Candidate uses 'Candidate' role to attend interview (voice)\n"
         "- They progress to further rounds only if their previous round score is high enough\n"
         "- View aggregated evaluation in 'HR Reports'"
     )
 
 # ======================================================================
-#                        CANDIDATE INTERFACE
+#                        CANDIDATE INTERFACE (VOICE)
 # ======================================================================
 else:  # user_role == "Candidate"
-    st.subheader("Candidate Interview")
+    st.subheader("Candidate Interview (Voice)")
 
     if not st.session_state.rounds:
         st.warning(
@@ -218,7 +253,8 @@ else:  # user_role == "Candidate"
             st.info(
                 "Welcome! This is an automated HR interview.\n\n"
                 + "\n".join(info_lines)
-                + "\n\nYou must perform well in each round to proceed to the next."
+                + "\n\nYou must perform well in each round to proceed to the next.\n"
+                "Questions will be spoken aloud and your answers will be recorded via microphone."
             )
             if st.button("Start Interview", key="candidate_start"):
                 st.session_state.candidate_started = True
@@ -233,7 +269,6 @@ else:  # user_role == "Candidate"
             round_idx = st.session_state.current_round_index
 
             if round_idx >= total_rounds:
-                # No more rounds
                 st.session_state.interview_finished = True
             else:
                 current_round = st.session_state.rounds[round_idx]
@@ -244,9 +279,8 @@ else:  # user_role == "Candidate"
 
                 q_idx = st.session_state.question_index_in_round
 
-                # If finished all questions in this round -> decide pass/fail & next round
+                # Finished all Qs in this round: decide pass/fail for next round
                 if q_idx >= total_q_in_round:
-                    # Compute this round's average score
                     scores = []
                     for ev in st.session_state.evaluations:
                         if ev["round_key"] == round_key:
@@ -256,17 +290,13 @@ else:  # user_role == "Candidate"
                             if score is not None:
                                 scores.append(score)
 
-                    if scores:
-                        avg_score = sum(scores) / len(scores)
-                    else:
-                        avg_score = 0.0
+                    avg_score = sum(scores) / len(scores) if scores else 0.0
 
                     if avg_score >= ROUND_PASS_THRESHOLD and round_idx < total_rounds - 1:
                         st.success(
-                            f"You passed **{round_name}** with an average score of {avg_score:.2f}/10 "
-                            f"and will move to the next round."
+                            f"You passed **{round_name}** with an average score of {avg_score:.2f}/10. "
+                            "You will now move to the next round."
                         )
-                        # Move to next round
                         st.session_state.current_round_index += 1
                         st.session_state.question_index_in_round = 0
                         st.rerun()
@@ -282,8 +312,9 @@ else:  # user_role == "Candidate"
                                 "Thank you for attending the interview."
                             )
                         st.session_state.interview_finished = True
+
                 else:
-                    # Ask next question in current round
+                    # ---- Ask current question (voice) and record candidate via mic ----
                     current_question = questions[q_idx]
 
                     st.markdown(
@@ -291,12 +322,47 @@ else:  # user_role == "Candidate"
                     )
                     st.markdown(current_question)
 
-                    answer_key = f"cand_answer_{round_idx}_{q_idx}"
+                    # Make agent speak question (HR voice via browser TTS)
+                    speak_text(
+                        current_question,
+                        key=f"round{round_idx}_q{q_idx}",
+                    )
+
+                    st.write("🎙️ Speak your answer below (click to start/stop):")
+
+                    audio = mic_recorder(
+                        start_prompt="Start recording",
+                        stop_prompt="Stop recording",
+                        key=f"mic_{round_idx}_{q_idx}",
+                    )
+
+                    # Keep transcript in session so it persists
+                    transcript_key = f"transcript_{round_idx}_{q_idx}"
+                    if transcript_key not in st.session_state:
+                        st.session_state[transcript_key] = ""
+
+                    if audio and audio.get("bytes"):
+                        with st.spinner("Transcribing your answer..."):
+                            try:
+                                text = transcribe_audio_bytes(audio["bytes"])
+                                if text:
+                                    st.session_state[transcript_key] = text
+                                    st.success(
+                                        "Transcription complete. You can quickly review your answer below."
+                                    )
+                                else:
+                                    st.error(
+                                        "Could not transcribe audio. Please try speaking again."
+                                    )
+                            except Exception as e:
+                                st.error(f"Error during transcription: {e}")
+
+                    # Show the recognized text (editing is optional)
                     answer = st.text_area(
-                        "Your answer:",
-                        height=180,
-                        placeholder="Type your answer here...",
-                        key=answer_key,
+                        "Transcribed answer (optional to edit):",
+                        value=st.session_state[transcript_key],
+                        height=160,
+                        key=f"answer_box_{round_idx}_{q_idx}",
                     )
 
                     button_label = (
@@ -309,14 +375,17 @@ else:  # user_role == "Candidate"
                         button_label,
                         key=f"candidate_submit_{round_idx}_{q_idx}",
                     ):
-                        if not answer.strip():
-                            st.error("Please enter an answer before submitting.")
+                        final_answer = answer.strip()
+                        if not final_answer:
+                            st.error(
+                                "Please speak your answer and wait for transcription before submitting."
+                            )
                         else:
                             with st.spinner("Saving your answer and evaluating..."):
                                 try:
                                     eval_result = evaluate_answer(
                                         question=current_question,
-                                        answer_transcript=answer,
+                                        answer_transcript=final_answer,
                                         answer_duration_seconds=None,
                                         filler_word_count=None,
                                         role_title=st.session_state.jd_info.get(
@@ -329,7 +398,7 @@ else:  # user_role == "Candidate"
                                             "round_key": round_key,
                                             "round_name": round_name,
                                             "question": current_question,
-                                            "answer": answer,
+                                            "answer": final_answer,
                                             "evaluation": eval_result,
                                             "timestamp": datetime.now().isoformat(),
                                         }
@@ -344,16 +413,47 @@ else:  # user_role == "Candidate"
                                         f"Error while evaluating your answer: {e}"
                                     )
 
-        # Completion message
+        # Completion message + candidate feedback
         if st.session_state.interview_finished and st.session_state.candidate_started:
             st.success(
                 "Your interview is completed. HR will review your performance "
-                "round by round and get back to you."
+                "round by round.\n\nHere is a brief feedback summary to help you improve:"
             )
 
+            if st.session_state.evaluations:
+                # Lazy import to avoid circular import issues
+                from report_generator import generate_candidate_feedback
+
+                with st.spinner("Generating your feedback summary..."):
+                    try:
+                        candidate_feedback = generate_candidate_feedback(
+                            role_title=st.session_state.jd_info.get(
+                                "role_title", "this role"
+                            ),
+                            evaluations=st.session_state.evaluations,
+                        )
+
+                        st.write("### Overall Summary")
+                        st.write(candidate_feedback.get("summary", ""))
+
+                        st.write("### What You Did Well")
+                        for s in candidate_feedback.get("strengths", []):
+                            st.write("- ", s)
+
+                        st.write("### Where You Can Improve")
+                        for w in candidate_feedback.get("improvement_areas", []):
+                            st.write("- ", w)
+
+                        st.write("### Suggested Practice & Next Steps")
+                        for a in candidate_feedback.get("suggested_actions", []):
+                            st.write("- ", a)
+
+                    except Exception as e:
+                        st.error(f"Could not generate feedback right now: {e}")
+
     st.sidebar.info(
-        "Candidate View:\n\n"
-        "- You will see one question at a time per round.\n"
-        "- Your performance in each round decides if you go to the next.\n"
-        "- Your responses are stored and evaluated for HR only."
+        "Candidate View (Voice):\n\n"
+        "- Agent speaks each question.\n"
+        "- You answer using your microphone.\n"
+        "- Your responses are evaluated in the background and summarized at the end."
     )
