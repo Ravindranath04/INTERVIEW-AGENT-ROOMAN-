@@ -19,7 +19,7 @@ from streamlit_mic_recorder import mic_recorder
 
 # ---------- Streamlit Page Config ----------
 st.set_page_config(
-    page_title="AI Voice Interview Agent",
+    page_title="AI Interview Agent",
     layout="wide",
     page_icon="🎧",
 )
