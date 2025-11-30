@@ -1,43 +1,62 @@
 # evaluator.py
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 from llm_client import call_gemini_json
 
 SYSTEM_PROMPT_EVAL = """
-You are an HR Interview Evaluator.
+You are an experienced HR + Hiring Manager evaluator.
 
 You will receive:
-- the question asked
-- the candidate's transcribed answer (plain text)
-- optional metadata: answer_duration_seconds, filler_word_count
+
+- question: the interview question asked
+- answer_transcript: the candidate's spoken answer, transcribed
+- role_title: the role they applied for
+- jd_info: parsed JD (responsibilities, required skills, role_type, etc.)
+- resume_info: parsed resume (projects, skills, roles)
+- match_report: resume vs JD match analysis (strong_matches, missing_critical_skills, etc.)
+- optional metrics: answer_duration_seconds, filler_word_count
+
+Your evaluation must consider:
+
+- How well the answer uses the candidate's actual past projects and experience.
+- How strongly the answer demonstrates skills that the company cares about
+  (from jd_info.core_technical_skills and jd_info.soft_skills).
+- Whether the candidate is addressing any previously missing/weak skill areas.
+- Depth of explanation: decisions, trade-offs, impact, ownership.
+- Communication: structure, clarity, grammar, and confidence.
 
 You must:
-1. Extract a STAR breakdown:
+
+1. Extract STAR:
    - situation
    - task
    - action
    - result
 
-2. Score these dimensions from 0 to 10:
-   - relevance   (did they answer the question?)
-   - content_depth (quality and detail of example)
-   - star_completeness (how clear S, T, A, R are)
-   - role_skill_match (how well it demonstrates skills relevant to the role)
-   - grammar (clarity, correctness, fluency)
-   - confidence (based on language, directness, any hints from metadata)
-   - overall_impression (HR gut rating)
+2. Score (0–10):
+   - relevance (did they answer the question?)
+   - content_depth (how detailed, concrete, and insightful)
+   - star_completeness (how clearly S/T/A/R are present)
+   - role_skill_match (for this specific company's JD)
+   - grammar (clarity and language quality)
+   - confidence (based on tone/decisiveness from transcript)
+   - overall_impression (HR gut rating for this answer)
 
-3. Provide short feedback:
-   - strengths: list of 1-3 bullet points
-   - areas_to_improve: list of 1-3 bullet points
+3. Provide feedback:
+   - strengths: 1–3 bullet points, candidate-friendly
+   - areas_to_improve: 1–3 bullet points, specific and actionable
 
-You MUST return valid JSON with exactly this structure:
+4. For HR:
+   - hr_comment: 1–2 lines explaining what this answer reveals about the candidate
+     (e.g., "Strong ownership of backend projects, but limited exposure to production incidents").
+
+Return STRICT JSON:
 
 {
   "star": {
-    "situation": "...",
-    "task": "...",
-    "action": "...",
-    "result": "..."
+    "situation": "",
+    "task": "",
+    "action": "",
+    "result": ""
   },
   "scores": {
     "relevance": 0-10,
@@ -49,10 +68,10 @@ You MUST return valid JSON with exactly this structure:
     "overall_impression": 0-10
   },
   "feedback": {
-    "strengths": ["...", "..."],
-    "areas_to_improve": ["...", "..."]
+    "strengths": [],
+    "areas_to_improve": []
   },
-  "summary_comment": "One short HR-style summary sentence."
+  "hr_comment": ""
 }
 """
 
@@ -60,36 +79,34 @@ You MUST return valid JSON with exactly this structure:
 def evaluate_answer(
     question: str,
     answer_transcript: str,
-    *,
-    answer_duration_seconds: Optional[float] = None,
-    filler_word_count: Optional[int] = None,
-    role_title: Optional[str] = None,
+    answer_duration_seconds: Optional[float],
+    filler_word_count: Optional[int],
+    role_title: Optional[str],
+    jd_info: Optional[Dict[str, Any]] = None,
+    resume_info: Optional[Dict[str, Any]] = None,
+    match_report: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """
-    Evaluate a single answer using Gemini.
-    Includes grammar & confidence.
-    """
-
-    metadata_text_parts = []
-    if answer_duration_seconds is not None:
-        metadata_text_parts.append(f"answer_duration_seconds: {answer_duration_seconds}")
-    if filler_word_count is not None:
-        metadata_text_parts.append(f"filler_word_count: {filler_word_count}")
-    if role_title:
-        metadata_text_parts.append(f"role_title: {role_title}")
-
-    metadata_block = "\n".join(metadata_text_parts) if metadata_text_parts else "None"
-
     user_prompt = f"""
+ROLE TITLE:
+{role_title}
+
 QUESTION:
-\"\"\"{question}\"\"\"
+{question}
 
-CANDIDATE ANSWER (TRANSCRIPT):
-\"\"\"{answer_transcript}\"\"\"
+ANSWER (TRANSCRIBED):
+{answer_transcript}
 
-METADATA:
-{metadata_block}
+OPTIONAL METRICS:
+- Approx answer duration (seconds): {answer_duration_seconds}
+- Approx filler words (um/uh/etc.): {filler_word_count}
+
+JD INFO:
+{jd_info}
+
+RESUME INFO:
+{resume_info}
+
+MATCH REPORT:
+{match_report}
 """
-
-    result = call_gemini_json(SYSTEM_PROMPT_EVAL, user_prompt)
-    return result
+    return call_gemini_json(SYSTEM_PROMPT_EVAL, user_prompt)
