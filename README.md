@@ -7,7 +7,9 @@ Live interview flow is dynamically created based on:
 - Resume content
 - Job description (JD)
 - Experience level
-- Company expectations
+- Company expectationsD
+
+  ![DASHBOARD](https://github.com/Ravindranath04/INTERVIEW-AGENT-ROOMAN-/blob/main/AI%20Voice%20Interview%20Agent%20-%20High%20Level%20Architecture.png)
 
 ---
 
@@ -37,28 +39,8 @@ Live interview flow is dynamically created based on:
 
 ---
 
-## 🧠 How it Works
-
-```
-
-Resume + JD
-│
-▼
-AI Analysis Engine
-│
-▼
-Dynamic Interview Plan (Rounds + Questions)
-│
-▼
-Voice Interview (Speech ↔ Text)
-│
-▼
-Evaluation Engine
-│
-▼
-Candidate & HR Reports
-
-```
+## Architecture Diagram 
+![DASHBOARD](https://github.com/Ravindranath04/INTERVIEW-AGENT-ROOMAN-/blob/main/AI%20Voice%20Interview%20Agent%20-%20High%20Level%20Architecture.png)
 
 ---
 
