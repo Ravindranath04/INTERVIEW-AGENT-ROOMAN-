@@ -47,13 +47,35 @@ def speak_text(text: str, key: str):
     )
 
 
+# ---------- Dynamic round threshold based on experience ----------
+def get_round_pass_threshold() -> float:
+    """
+    Decide how strict the round pass threshold should be
+    based on candidate experience level.
+    """
+    profile = st.session_state.get("profile") or {}
+    exp = (profile.get("experience") or "").lower()
+
+    if "fresher" in exp or "intern" in exp:
+        return 5.0
+    elif "junior" in exp:
+        return 6.0
+    elif "mid" in exp:
+        return 7.0
+    elif "senior" in exp:
+        return 8.0
+    else:
+        # default if unknown
+        return 6.0
+
+
 # ---------- Session State Initialization ----------
 if "stage" not in st.session_state:
     # stages: onboarding -> analysis -> interview -> results
     st.session_state.stage = "onboarding"
 
 if "profile" not in st.session_state:
-    st.session_state.profile = None  # {name, company, role, experience_level}
+    st.session_state.profile = None  # {name, company, role, experience_level, email}
 
 if "resume_bytes" not in st.session_state:
     st.session_state.resume_bytes = None
@@ -92,9 +114,6 @@ if "interview_finished" not in st.session_state:
 
 if "candidate_started" not in st.session_state:
     st.session_state.candidate_started = False
-
-# Threshold to go to next round (avg overall_impression out of 10)
-ROUND_PASS_THRESHOLD = 6.0
 
 
 # ---------- Reset helper ----------
@@ -136,47 +155,91 @@ def render_onboarding():
     st.markdown(
         """
 This agent will:
+
 - Analyze your **resume** and the **job description**
-- Build a **custom interview** based on the company and role
-- Conduct the interview using **voice only** (HR-style questions)
-- Evaluate your skills and give you a **feedback report**
+- Build a **realistic interview flow**
+- Conduct the interview using **voice**
+- Generate HR & skill feedback automatically
         """
     )
 
     col1, col2 = st.columns(2)
     with col1:
-        name = st.text_input("Full Name")
-        email = st.text_input("Email (optional)")
-        company = st.text_input("Company Name")
+        name = st.text_input("Full Name", key="name")
+        email = st.text_input("Email (optional)", key="email")
+        company = st.text_input("Company Name", key="company")
     with col2:
-        role = st.text_input("Role Applying For")
+        role = st.text_input("Role Applying For", key="role")
         experience = st.selectbox(
             "Experience Level",
             ["Fresher", "Junior", "Mid", "Senior"],
+            key="experience",
         )
 
-    resume_file = st.file_uploader("Upload Your Resume (PDF)", type=["pdf"])
+    resume_file = st.file_uploader(
+        "Upload Your Resume (PDF)",
+        type=["pdf"],
+        key="resume_file",
+    )
+
     jd_text = st.text_area(
         "Paste the Job Description (JD)",
         height=220,
         placeholder="Paste the JD you are applying for...",
+        key="jd_text_input",
     )
 
+    # Debug UI (TEMPORARY – shows what's missing)
+    st.write("DEBUG:")
+    st.write({
+        "name": bool(name),
+        "company": bool(company),
+        "role": bool(role),
+        "experience": bool(experience),
+        "resume uploaded": resume_file is not None,
+        "jd pasted": bool(jd_text.strip()),
+    })
+
     if st.button("Start Voice Interview Setup"):
-        if not name or not company or not role or not resume_file or not jd_text.strip():
-            st.error("Please fill all the required fields and upload your resume & JD.")
-        else:
-            st.session_state.profile = {
-                "name": name,
-                "email": email,
-                "company": company,
-                "role": role,
-                "experience": experience,
-            }
-            st.session_state.resume_bytes = resume_file.read()
-            st.session_state.jd_text = jd_text
-            st.session_state.stage = "analysis"
-            st.rerun()
+        missing = []
+
+        if not name.strip():
+            missing.append("Name")
+        if not company.strip():
+            missing.append("Company Name")
+        if not role.strip():
+            missing.append("Role")
+        if not resume_file:
+            missing.append("Resume file")
+        if not jd_text.strip():
+            missing.append("Job Description")
+
+        if missing:
+            st.error("Missing fields: " + ", ".join(missing))
+            return
+
+        # ✅ SAFELY STORE FILE ONCE
+        resume_bytes = resume_file.read()
+        if not resume_bytes:
+            st.error("Uploaded resume file is empty. Please upload again.")
+            return
+
+        # ✅ SAVE INTO SESSION STATE
+        st.session_state.profile = {
+            "name": name,
+            "email": email,
+            "company": company,
+            "role": role,
+            "experience": experience,
+        }
+
+        st.session_state.resume_bytes = resume_bytes
+        st.session_state.jd_text = jd_text
+
+        st.success("Resume and JD uploaded successfully ✅")
+        st.session_state.stage = "analysis"
+        st.rerun()
+
 
 
 # ======================================================================
@@ -191,7 +254,7 @@ def run_analysis():
         if not resume_text:
             st.error(
                 "Could not read text from your resume PDF. "
-                "Please upload a text-based PDF (not scanned image)."
+                "Please upload a text-based PDF (not just a scanned image)."
             )
             if st.button("Back"):
                 reset_everything()
@@ -203,7 +266,7 @@ def run_analysis():
         jd_info = analyze_job_description(st.session_state.jd_text)
         match_report = match_resume_to_jd(jd_info, resume_info)
 
-        # Build interview plan & rounds based on JD
+        # Build interview plan & dynamic rounds based on JD (realistic company-style flow)
         plan = generate_interview_plan(jd_info)
         rounds = build_rounds(jd_info, plan)
 
@@ -261,7 +324,7 @@ Hi **{name}**,
 We’ve analyzed your **resume** and the **{role}** role at **{company}**.
 
 Now we’ll start a **voice-only interview** tailored to:
-- The company’s JD
+- The company's JD
 - Your skills and projects
 - Your experience level
             """
@@ -283,9 +346,10 @@ Now we’ll start a **voice-only interview** tailored to:
         for idx, rnd in enumerate(rounds, start=1):
             st.write(f"- **Round {idx}:** {rnd['name']} ({len(rnd['questions'])} questions)")
 
+        threshold = get_round_pass_threshold()
         st.info(
             "The agent will **speak each question**, and you will **answer using your microphone**.\n"
-            "You can review the transcribed text briefly before submitting."
+            f"Round pass threshold is dynamically set based on your experience level (approx **{threshold}/10** average per round)."
         )
 
         if st.button("🎙️ Start Voice Interview"):
@@ -327,8 +391,9 @@ Now we’ll start a **voice-only interview** tailored to:
                         scores.append(score)
 
             avg_score = sum(scores) / len(scores) if scores else 0.0
+            threshold = get_round_pass_threshold()
 
-            if avg_score >= ROUND_PASS_THRESHOLD and round_idx < total_rounds - 1:
+            if avg_score >= threshold and round_idx < total_rounds - 1:
                 st.success(
                     f"You passed **{round_name}** with an average score of {avg_score:.2f}/10. "
                     "We will now move to the next round."
@@ -341,7 +406,8 @@ Now we’ll start a **voice-only interview** tailored to:
                 if round_idx < total_rounds - 1:
                     st.error(
                         f"You did not meet the threshold to proceed beyond **{round_name}** "
-                        f"(average score {avg_score:.2f}/10). The interview ends here."
+                        f"(average score {avg_score:.2f}/10 vs threshold {threshold:.1f}). "
+                        "The interview ends here."
                     )
                 else:
                     st.success(
@@ -446,7 +512,9 @@ Now we’ll start a **voice-only interview** tailored to:
                         st.rerun()
 
                     except Exception as e:
-                        st.error(f"Error while evaluating your answer: {e}")
+                        st.error(
+                            f"Error while evaluating your answer: {e}"
+                        )
 
     # If finished, move to results
     if st.session_state.interview_finished:
@@ -504,7 +572,7 @@ def render_results():
             st.write("- ", a)
 
     # HR-style report in expander
-    with st.expander("🧑‍💼 HR-style Report (Hire / Reject decision)", expanded=False):
+    with st.expander("🧑‍💼 HR-style Report (Hire / Hold / Reject decision)", expanded=False):
         with st.spinner("Generating HR-style summary..."):
             try:
                 hr_report = generate_candidate_report(
