@@ -114,21 +114,6 @@ streamlit run app.py
 
 ---
 
-## 🌐 Deployment (Streamlit Cloud)
-
-1. Push code to GitHub
-2. Go to [https://share.streamlit.io](https://share.streamlit.io)
-3. Deploy your repo
-4. Add Secret:
-
-```toml
-GEMINI_API_KEY = "your_api_key_here"
-```
-
-5. Reboot App
-
----
-
 ## 🎤 Voice Support Tips
 
 * Use **Google Chrome / Edge**
