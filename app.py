@@ -28,31 +28,67 @@ st.set_page_config(
 # ---------- Helper: make the agent speak the question ----------
 def speak_text(text: str, key: str):
     """
-    Use browser's SpeechSynthesis (Web Speech API) to speak text on the client side.
-    We mark a 'spoken_key' in session_state to avoid re-speaking the same question on every rerun.
-    """
-    spoken_flag_key = f"spoken_{key}"
-    if st.session_state.get(spoken_flag_key):
-        return
+    Use browser's SpeechSynthesis to speak the question.
 
-    st.session_state[spoken_flag_key] = True
+    - Tries to auto-speak once per question (may be blocked by autoplay rules).
+    - Always renders a 🔊 button that the user can click to play/replay the question.
+    """
+    # Decide whether to try auto-speak this rerun
+    spoken_flag_key = f"spoken_{key}"
+    auto_speak = False
+    if not st.session_state.get(spoken_flag_key):
+        st.session_state[spoken_flag_key] = True
+        auto_speak = True  # first time for this question
 
     escaped = json.dumps(text)
+    # Make sure the JS function name is a valid identifier
+    safe_key = key.replace("-", "_").replace(" ", "_")
+
     st.markdown(
         f"""
         <script>
-        const text = {escaped};
-        if ("speechSynthesis" in window) {{
-            const msg = new SpeechSynthesisUtterance(text);
+        const questionText_{safe_key} = {escaped};
+
+        function speakQuestion_{safe_key}() {{
+            if (!("speechSynthesis" in window)) {{
+                alert("Speech synthesis is not supported in this browser.");
+                return;
+            }}
+            const msg = new SpeechSynthesisUtterance(questionText_{safe_key});
             msg.rate = 1;
             msg.pitch = 1;
             window.speechSynthesis.cancel();
             window.speechSynthesis.speak(msg);
         }}
+
+        // Try auto-speak only once per question (may be blocked by browser)
+        if ({str(auto_speak).lower()}) {{
+            // small delay so page finishes rendering
+            setTimeout(speakQuestion_{safe_key}, 300);
+        }}
         </script>
+
+        <div style="margin: 0.5rem 0 0.8rem 0;">
+            <button
+                type="button"
+                onclick="speakQuestion_{safe_key}()"
+                style="
+                    border-radius: 999px;
+                    border: 1px solid #38bdf8;
+                    padding: 4px 12px;
+                    background: rgba(15,23,42,0.9);
+                    color: #e5e7eb;
+                    font-size: 0.8rem;
+                    cursor: pointer;
+                "
+            >
+                🔊 Play question again
+            </button>
+        </div>
         """,
         unsafe_allow_html=True,
     )
+
 
 
 # ---------- Voice level helper ----------
